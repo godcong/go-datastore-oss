@@ -47,17 +47,22 @@ func (s *datastore) Put(k ds.Key, value []byte) error {
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {
-	panic("implement me")
+	val, err := s.Bucket.GetObject(key.String())
+	if err != nil {
+		return nil, err
+	}
+	_, err = val.Read(value)
+	return value, err
 }
 
 func (s *datastore) Has(key ds.Key) (exists bool, err error) {
-	panic("implement me")
+	return s.Bucket.IsObjectExist(key.String())
 }
 
 func (s *datastore) Delete(key ds.Key) error {
-	panic("implement me")
+	return s.Bucket.DeleteObject(key.String())
 }
 
 func (s *datastore) Query(q query.Query) (query.Results, error) {
-	panic("implement me")
+
 }
