@@ -1,0 +1,9 @@
+# github.com/aliyun/aliyun-oss-go-sdk v0.0.0-20181116160301-c6838fdc33ed
+github.com/aliyun/aliyun-oss-go-sdk/oss
+# github.com/google/uuid v1.1.0
+github.com/google/uuid
+# github.com/ipfs/go-datastore v3.2.0+incompatible
+github.com/ipfs/go-datastore
+github.com/ipfs/go-datastore/query
+# github.com/jbenet/goprocess v0.0.0-20160826012719-b497e2f366b8
+github.com/jbenet/goprocess
