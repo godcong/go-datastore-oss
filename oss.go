@@ -6,10 +6,19 @@ import (
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
-	logging "github.com/ipfs/go-log"
 )
 
-var log = logging.Logger("flatfs")
+const (
+	// listMax is the largest amount of objects you can request from S3 in a list
+	// call.
+	listMax = 1000
+
+	// deleteMax is the largest amount of objects you can delete from S3 in a
+	// delete objects call.
+	deleteMax = 1000
+
+	defaultWorkers = 100
+)
 
 var _ ds.Datastore = (*datastore)(nil)
 
@@ -64,5 +73,58 @@ func (s *datastore) Delete(key ds.Key) error {
 }
 
 func (s *datastore) Query(q query.Query) (query.Results, error) {
+	if q.Orders != nil || q.Filters != nil {
+		return nil, fmt.Errorf("s3ds: filters or orders are not supported")
+	}
 
+	limit := q.Limit + q.Offset
+	if limit == 0 || limit > listMax {
+		limit = listMax
+	}
+	lsRes, err := s.Bucket.ListObjects(oss.MaxKeys(limit), oss.Prefix(q.Prefix))
+	if err != nil {
+		return nil, err
+	}
+
+	index := q.Offset
+	nextValue := func() (query.Result, bool) {
+		for index >= len(lsRes.Objects) {
+			if !lsRes.IsTruncated {
+				return query.Result{}, false
+			}
+
+			index -= len(lsRes.Objects)
+
+			lsRes, err = s.Bucket.ListObjects(
+				oss.Prefix(q.Prefix),
+				oss.MaxKeys(listMax),
+				oss.Delimiter("/"),
+				oss.Marker(lsRes.NextMarker),
+			)
+			if err != nil {
+				return query.Result{Error: err}, false
+			}
+		}
+
+		entry := query.Entry{
+			Key: ds.NewKey(lsRes.Objects[index].Key).String(),
+		}
+		if !q.KeysOnly {
+			value, err := s.Get(ds.NewKey(entry.Key))
+			if err != nil {
+				return query.Result{Error: err}, false
+			}
+			entry.Value = value
+		}
+
+		index++
+		return query.Result{Entry: entry}, true
+	}
+
+	return query.ResultsFromIterator(q, query.Iterator{
+		Close: func() error {
+			return nil
+		},
+		Next: nextValue,
+	}), nil
 }
