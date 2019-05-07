@@ -7,6 +7,8 @@ import (
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
 	"strconv"
+	"strings"
+	"sync"
 )
 
 const (
@@ -28,11 +30,20 @@ type Config struct {
 	AccessKeyID     string
 	AccessKeySecret string
 	BucketName      string
+	Workers         int
 }
 
 type datastore struct {
 	Config
 	Bucket *oss.Bucket
+}
+
+func (s *datastore) Batch() (ds.Batch, error) {
+	return &ossBatch{
+		s:          s,
+		ops:        make(map[string]batchOp),
+		numWorkers: s.Workers,
+	}, nil
 }
 
 func (s *datastore) GetSize(key ds.Key) (size int, err error) {
@@ -60,6 +71,10 @@ func newDataStore(config Config, bucket *oss.Bucket) *datastore {
 }
 
 func NewOssDatastore(config Config) (*datastore, error) {
+	if config.Workers == 0 {
+		config.Workers = defaultWorkers
+	}
+
 	client, err := oss.New(config.Endpoint, config.AccessKeyID, config.AccessKeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new client: %s", err)
@@ -149,3 +164,117 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 		Next: nextValue,
 	}), nil
 }
+
+type ossBatch struct {
+	s          *datastore
+	ops        map[string]batchOp
+	numWorkers int
+}
+
+type batchOp struct {
+	val    []byte
+	delete bool
+}
+
+func (b *ossBatch) Put(k ds.Key, val []byte) error {
+	b.ops[k.String()] = batchOp{
+		val:    val,
+		delete: false,
+	}
+	return nil
+}
+
+func (b *ossBatch) Delete(k ds.Key) error {
+	b.ops[k.String()] = batchOp{
+		val:    nil,
+		delete: true,
+	}
+	return nil
+}
+
+func (b *ossBatch) Commit() error {
+	var (
+		deleteObjs []string
+		putKeys    []ds.Key
+	)
+	for k, op := range b.ops {
+		if op.delete {
+			deleteObjs = append(deleteObjs, k)
+		} else {
+			putKeys = append(putKeys, ds.NewKey(k))
+		}
+	}
+
+	numJobs := len(putKeys) + (len(deleteObjs) / deleteMax)
+	jobs := make(chan func() error, numJobs)
+	results := make(chan error, numJobs)
+
+	numWorkers := b.numWorkers
+	if numJobs < numWorkers {
+		numWorkers = numJobs
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	defer wg.Wait()
+
+	for w := 0; w < numWorkers; w++ {
+		go func() {
+			defer wg.Done()
+			worker(jobs, results)
+		}()
+	}
+
+	for _, k := range putKeys {
+		jobs <- b.newPutJob(k, b.ops[k.String()].val)
+	}
+
+	if len(deleteObjs) > 0 {
+		for i := 0; i < len(deleteObjs); i += deleteMax {
+			limit := deleteMax
+			if len(deleteObjs[i:]) < limit {
+				limit = len(deleteObjs[i:])
+			}
+
+			jobs <- b.newDeleteJob(deleteObjs[i : i+limit])
+		}
+	}
+	close(jobs)
+
+	var errs []string
+	for i := 0; i < numJobs; i++ {
+		err := <-results
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("s3ds: failed batch operation:\n%s", strings.Join(errs, "\n"))
+	}
+
+	return nil
+}
+
+func (b *ossBatch) newPutJob(k ds.Key, value []byte) func() error {
+	return func() error {
+		return b.s.Put(k, value)
+	}
+}
+
+func (b *ossBatch) newDeleteJob(objs []string) func() error {
+	return func() error {
+		_, err := b.s.Bucket.DeleteObjects(objs, oss.DeleteObjectsQuiet(true))
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+}
+
+func worker(jobs <-chan func() error, results chan<- error) {
+	for j := range jobs {
+		results <- j()
+	}
+}
+
+var _ ds.Batching = (*datastore)(nil)
