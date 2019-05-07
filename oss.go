@@ -30,7 +30,9 @@ type Config struct {
 	AccessKeyID     string
 	AccessKeySecret string
 	BucketName      string
-	Workers         int
+	//Region          string
+	RootDirectory string
+	Workers       int
 }
 
 type datastore struct {
