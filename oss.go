@@ -6,6 +6,7 @@ import (
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
+	"strconv"
 )
 
 const (
@@ -34,7 +35,27 @@ type datastore struct {
 	Bucket *oss.Bucket
 }
 
-func NewOssBucket(config Config, bucket *oss.Bucket) *datastore {
+func (s *datastore) GetSize(key ds.Key) (size int, err error) {
+	headers, err := s.Bucket.GetObjectMeta(key.String())
+	if err != nil {
+		if err.Error() == "NoSuchKey" {
+			return -1, ds.ErrNotFound
+		}
+		return -1, err
+	}
+	length := headers.Get("Content-Length")
+	u, err := strconv.ParseUint(length, 10, 64)
+	if err != nil {
+		return -1, err
+	}
+	return int(u), nil
+}
+
+func (s *datastore) Close() error {
+	return nil
+}
+
+func newDataStore(config Config, bucket *oss.Bucket) *datastore {
 	return &datastore{Config: config, Bucket: bucket}
 }
 
@@ -48,11 +69,11 @@ func NewOssDatastore(config Config) (*datastore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bucket: %s", err)
 	}
-	return NewOssBucket(config, bucket), nil
+	return newDataStore(config, bucket), nil
 }
 
-func (s *datastore) Put(k ds.Key, value []byte) error {
-	return s.Bucket.PutObject(k.String(), bytes.NewBuffer(value))
+func (s *datastore) Put(key ds.Key, value []byte) error {
+	return s.Bucket.PutObject(key.String(), bytes.NewBuffer(value))
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {

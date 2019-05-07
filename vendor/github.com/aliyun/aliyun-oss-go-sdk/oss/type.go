@@ -2,6 +2,7 @@ package oss
 
 import (
 	"encoding/xml"
+	"fmt"
 	"net/url"
 	"time"
 )
@@ -42,77 +43,105 @@ type LifecycleConfiguration struct {
 
 // LifecycleRule defines Lifecycle rules
 type LifecycleRule struct {
-	XMLName    xml.Name            `xml:"Rule"`
-	ID         string              `xml:"ID"`         // The rule ID
-	Prefix     string              `xml:"Prefix"`     // The object key prefix
-	Status     string              `xml:"Status"`     // The rule status (enabled or not)
-	Expiration LifecycleExpiration `xml:"Expiration"` // The expiration property
+	XMLName              xml.Name                       `xml:"Rule"`
+	ID                   string                         `xml:"ID,omitempty"`                   // The rule ID
+	Prefix               string                         `xml:"Prefix"`                         // The object key prefix
+	Status               string                         `xml:"Status"`                         // The rule status (enabled or not)
+	Expiration           *LifecycleExpiration           `xml:"Expiration,omitempty"`           // The expiration property
+	Transitions          []LifecycleTransition          `xml:"Transition,omitempty"`           // The transition property
+	AbortMultipartUpload *LifecycleAbortMultipartUpload `xml:"AbortMultipartUpload,omitempty"` // The AbortMultipartUpload property
 }
 
 // LifecycleExpiration defines the rule's expiration property
 type LifecycleExpiration struct {
-	XMLName xml.Name  `xml:"Expiration"`
-	Days    int       `xml:"Days,omitempty"` // Relative expiration time: The expiration time in days after the last modified time
-	Date    time.Time `xml:"Date,omitempty"` // Absolute expiration time: The expiration time in date.
+	XMLName           xml.Name `xml:"Expiration"`
+	Days              int      `xml:"Days,omitempty"`              // Relative expiration time: The expiration time in days after the last modified time
+	Date              string   `xml:"Date,omitempty"`              // Absolute expiration time: The expiration time in date, not recommended
+	CreatedBeforeDate string   `xml:"CreatedBeforeDate,omitempty"` // objects created before the date will be expired
 }
 
-type lifecycleXML struct {
-	XMLName xml.Name        `xml:"LifecycleConfiguration"`
-	Rules   []lifecycleRule `xml:"Rule"`
+// LifecycleTransition defines the rule's transition propery
+type LifecycleTransition struct {
+	XMLName           xml.Name         `xml:"Transition"`
+	Days              int              `xml:"Days,omitempty"`              // Relative transition time: The transition time in days after the last modified time
+	CreatedBeforeDate string           `xml:"CreatedBeforeDate,omitempty"` // objects created before the date will be expired
+	StorageClass      StorageClassType `xml:"StorageClass,omitempty"`      // Specifies the target storage type
 }
 
-type lifecycleRule struct {
-	XMLName    xml.Name            `xml:"Rule"`
-	ID         string              `xml:"ID"`
-	Prefix     string              `xml:"Prefix"`
-	Status     string              `xml:"Status"`
-	Expiration lifecycleExpiration `xml:"Expiration"`
+// LifecycleAbortMultipartUpload defines the rule's abort multipart upload propery
+type LifecycleAbortMultipartUpload struct {
+	XMLName           xml.Name `xml:"AbortMultipartUpload"`
+	Days              int      `xml:"Days,omitempty"`              // Relative expiration time: The expiration time in days after the last modified time
+	CreatedBeforeDate string   `xml:"CreatedBeforeDate,omitempty"` // objects created before the date will be expired
 }
 
-type lifecycleExpiration struct {
-	XMLName xml.Name `xml:"Expiration"`
-	Days    int      `xml:"Days,omitempty"`
-	Date    string   `xml:"Date,omitempty"`
-}
+const iso8601DateFormat = "2006-01-02T15:04:05.000Z"
 
-const expirationDateFormat = "2006-01-02T15:04:05.000Z"
-
-func convLifecycleRule(rules []LifecycleRule) []lifecycleRule {
-	rs := []lifecycleRule{}
-	for _, rule := range rules {
-		r := lifecycleRule{}
-		r.ID = rule.ID
-		r.Prefix = rule.Prefix
-		r.Status = rule.Status
-		if rule.Expiration.Date.IsZero() {
-			r.Expiration.Days = rule.Expiration.Days
-		} else {
-			r.Expiration.Date = rule.Expiration.Date.Format(expirationDateFormat)
-		}
-		rs = append(rs, r)
-	}
-	return rs
-}
-
-// BuildLifecycleRuleByDays builds a lifecycle rule with specified expiration days
+// BuildLifecycleRuleByDays builds a lifecycle rule objects will expiration in days after the last modified time
 func BuildLifecycleRuleByDays(id, prefix string, status bool, days int) LifecycleRule {
 	var statusStr = "Enabled"
 	if !status {
 		statusStr = "Disabled"
 	}
 	return LifecycleRule{ID: id, Prefix: prefix, Status: statusStr,
-		Expiration: LifecycleExpiration{Days: days}}
+		Expiration: &LifecycleExpiration{Days: days}}
 }
 
-// BuildLifecycleRuleByDate builds a lifecycle rule with specified expiration time.
+// BuildLifecycleRuleByDate builds a lifecycle rule objects will expiration in specified date
 func BuildLifecycleRuleByDate(id, prefix string, status bool, year, month, day int) LifecycleRule {
 	var statusStr = "Enabled"
 	if !status {
 		statusStr = "Disabled"
 	}
-	date := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	date := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC).Format(iso8601DateFormat)
 	return LifecycleRule{ID: id, Prefix: prefix, Status: statusStr,
-		Expiration: LifecycleExpiration{Date: date}}
+		Expiration: &LifecycleExpiration{Date: date}}
+}
+
+// ValidateLifecycleRule Determine if a lifecycle rule is valid, if it is invalid, it will return an error.
+func verifyLifecycleRules(rules []LifecycleRule) error {
+	if len(rules) == 0 {
+		return fmt.Errorf("invalid rules, the length of rules is zero")
+	}
+	for _, rule := range rules {
+		if rule.Status != "Enabled" && rule.Status != "Disabled" {
+			return fmt.Errorf("invalid rule, the value of status must be Enabled or Disabled")
+		}
+
+		expiration := rule.Expiration
+		if expiration != nil {
+			if (expiration.Days != 0 && expiration.CreatedBeforeDate != "") || (expiration.Days != 0 && expiration.Date != "") || (expiration.CreatedBeforeDate != "" && expiration.Date != "") || (expiration.Days == 0 && expiration.CreatedBeforeDate == "" && expiration.Date == "") {
+				return fmt.Errorf("invalid expiration lifecycle, must be set one of CreatedBeforeDate, Days and Date")
+			}
+		}
+
+		abortMPU := rule.AbortMultipartUpload
+		if abortMPU != nil {
+			if (abortMPU.Days != 0 && abortMPU.CreatedBeforeDate != "") || (abortMPU.Days == 0 && abortMPU.CreatedBeforeDate == "") {
+				return fmt.Errorf("invalid abort multipart upload lifecycle, must be set one of CreatedBeforeDate and Days")
+			}
+		}
+
+		transitions := rule.Transitions
+		if len(transitions) > 0 {
+			if len(transitions) > 2 {
+				return fmt.Errorf("invalid count of transition lifecycles, the count must than less than 3")
+			}
+
+			for _, transition := range transitions {
+				if (transition.Days != 0 && transition.CreatedBeforeDate != "") || (transition.Days == 0 && transition.CreatedBeforeDate == "") {
+					return fmt.Errorf("invalid transition lifecycle, must be set one of CreatedBeforeDate and Days")
+				}
+				if transition.StorageClass != StorageIA && transition.StorageClass != StorageArchive {
+					return fmt.Errorf("invalid transition lifecylce, the value of storage class must be IA or Archive")
+				}
+			}
+		} else if expiration == nil && abortMPU == nil {
+			return fmt.Errorf("invalid rule, must set one of Expiration, AbortMultipartUplaod and Transitions")
+		}
+	}
+
+	return nil
 }
 
 // GetBucketLifecycleResult defines GetBucketLifecycle's result object
@@ -465,4 +494,102 @@ func decodeListMultipartUploadResult(result *ListMultipartUploadResult) error {
 type createBucketConfiguration struct {
 	XMLName      xml.Name         `xml:"CreateBucketConfiguration"`
 	StorageClass StorageClassType `xml:"StorageClass,omitempty"`
+}
+
+// LiveChannelConfiguration defines the configuration for live-channel
+type LiveChannelConfiguration struct {
+	XMLName     xml.Name          `xml:"LiveChannelConfiguration"`
+	Description string            `xml:"Description,omitempty"` //Description of live-channel, up to 128 bytes
+	Status      string            `xml:"Status,omitempty"`      //Specify the status of livechannel
+	Target      LiveChannelTarget `xml:"Target"`                //target configuration of live-channel
+	// use point instead of struct to avoid omit empty snapshot
+	Snapshot *LiveChannelSnapshot `xml:"Snapshot,omitempty"` //snapshot configuration of live-channel
+}
+
+// LiveChannelTarget target configuration of live-channel
+type LiveChannelTarget struct {
+	XMLName      xml.Name `xml:"Target"`
+	Type         string   `xml:"Type"`                   //the type of object, only supports HLS
+	FragDuration int      `xml:"FragDuration,omitempty"` //the length of each ts object (in seconds), in the range [1,100]
+	FragCount    int      `xml:"FragCount,omitempty"`    //the number of ts objects in the m3u8 object, in the range of [1,100]
+	PlaylistName string   `xml:"PlaylistName,omitempty"` //the name of m3u8 object, which must end with ".m3u8" and the length range is [6,128]
+}
+
+// LiveChannelSnapshot snapshot configuration of live-channel
+type LiveChannelSnapshot struct {
+	XMLName     xml.Name `xml:"Snapshot"`
+	RoleName    string   `xml:"RoleName,omitempty"`    //The role of snapshot operations, it sholud has write permission of DestBucket and the permission to send messages to the NotifyTopic.
+	DestBucket  string   `xml:"DestBucket,omitempty"`  //Bucket the snapshots will be written to. should be the same owner as the source bucket.
+	NotifyTopic string   `xml:"NotifyTopic,omitempty"` //Topics of MNS for notifying users of high frequency screenshot operation results
+	Interval    int      `xml:"Interval,omitempty"`    //interval of snapshots, threre is no snapshot if no I-frame during the interval time
+}
+
+// CreateLiveChannelResult the result of crete live-channel
+type CreateLiveChannelResult struct {
+	XMLName     xml.Name `xml:"CreateLiveChannelResult"`
+	PublishUrls []string `xml:"PublishUrls>Url"` //push urls list
+	PlayUrls    []string `xml:"PlayUrls>Url"`    //play urls list
+}
+
+// LiveChannelStat the result of get live-channel state
+type LiveChannelStat struct {
+	XMLName       xml.Name         `xml:"LiveChannelStat"`
+	Status        string           `xml:"Status"`        //Current push status of live-channel: Disabled,Live,Idle
+	ConnectedTime time.Time        `xml:"ConnectedTime"` //The time when the client starts pushing, format: ISO8601
+	RemoteAddr    string           `xml:"RemoteAddr"`    //The ip address of the client
+	Video         LiveChannelVideo `xml:"Video"`         //Video stream information
+	Audio         LiveChannelAudio `xml:"Audio"`         //Audio stream information
+}
+
+// LiveChannelVideo video stream information
+type LiveChannelVideo struct {
+	XMLName   xml.Name `xml:"Video"`
+	Width     int      `xml:"Width"`     //Width (unit: pixels)
+	Height    int      `xml:"Height"`    //Height (unit: pixels)
+	FrameRate int      `xml:"FrameRate"` //FramRate
+	Bandwidth int      `xml:"Bandwidth"` //Bandwidth (unit: B/s)
+}
+
+// LiveChannelAudio audio stream information
+type LiveChannelAudio struct {
+	XMLName    xml.Name `xml:"Audio"`
+	SampleRate int      `xml:"SampleRate"` //SampleRate
+	Bandwidth  int      `xml:"Bandwidth"`  //Bandwidth (unit: B/s)
+	Codec      string   `xml:"Codec"`      //Encoding forma
+}
+
+// LiveChannelHistory the result of GetLiveChannelHistory, at most return up to lastest 10 push records
+type LiveChannelHistory struct {
+	XMLName xml.Name     `xml:"LiveChannelHistory"`
+	Record  []LiveRecord `xml:"LiveRecord"` //push records list
+}
+
+// LiveRecord push recode
+type LiveRecord struct {
+	XMLName    xml.Name  `xml:"LiveRecord"`
+	StartTime  time.Time `xml:"StartTime"`  //StartTime, format: ISO8601
+	EndTime    time.Time `xml:"EndTime"`    //EndTime, format: ISO8601
+	RemoteAddr string    `xml:"RemoteAddr"` //The ip address of remote client
+}
+
+// ListLiveChannelResult the result of ListLiveChannel
+type ListLiveChannelResult struct {
+	XMLName     xml.Name          `xml:"ListLiveChannelResult"`
+	Prefix      string            `xml:"Prefix"`      //Filter by the name start with the value of "Prefix"
+	Marker      string            `xml:"Marker"`      //cursor from which starting list
+	MaxKeys     int               `xml:"MaxKeys"`     //The maximum count returned. the default value is 100. it cannot be greater than 1000.
+	IsTruncated bool              `xml:"IsTruncated"` //Indicates whether all results have been returned, "true" indicates partial results returned while "false" indicates all results have been returned
+	NextMarker  string            `xml:"NextMarker"`  //NextMarker indicate the Marker value of the next request
+	LiveChannel []LiveChannelInfo `xml:"LiveChannel"` //The infomation of live-channel
+}
+
+// LiveChannelInfo the infomation of live-channel
+type LiveChannelInfo struct {
+	XMLName      xml.Name  `xml:"LiveChannel"`
+	Name         string    `xml:"Name"`            //The name of live-channel
+	Description  string    `xml:"Description"`     //Description of live-channel
+	Status       string    `xml:"Status"`          //Status: disabled or enabled
+	LastModified time.Time `xml:"LastModified"`    //Last modification time, format: ISO8601
+	PublishUrls  []string  `xml:"PublishUrls>Url"` //push urls list
+	PlayUrls     []string  `xml:"PlayUrls>Url"`    //play urls list
 }
