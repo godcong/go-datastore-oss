@@ -103,11 +103,11 @@ func (s *datastore) Get(key ds.Key) (value []byte, err error) {
 }
 
 func (s *datastore) Has(key ds.Key) (exists bool, err error) {
-	return s.Bucket.IsObjectExist(key.String())
+	return s.Bucket.IsObjectExist(s.ossPath(key.String()))
 }
 
 func (s *datastore) Delete(key ds.Key) error {
-	return s.Bucket.DeleteObject(key.String())
+	return s.Bucket.DeleteObject(s.ossPath(key.String()))
 }
 
 func (s *datastore) Query(q query.Query) (query.Results, error) {
@@ -119,7 +119,7 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 	if limit == 0 || limit > listMax {
 		limit = listMax
 	}
-	lsRes, err := s.Bucket.ListObjects(oss.MaxKeys(limit), oss.Prefix(q.Prefix))
+	lsRes, err := s.Bucket.ListObjects(oss.MaxKeys(limit), oss.Prefix(s.ossPath(q.Prefix)))
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 			index -= len(lsRes.Objects)
 
 			lsRes, err = s.Bucket.ListObjects(
-				oss.Prefix(q.Prefix),
+				oss.Prefix(s.ossPath(q.Prefix)),
 				oss.MaxKeys(listMax),
 				oss.Delimiter("/"),
 				oss.Marker(lsRes.NextMarker),
