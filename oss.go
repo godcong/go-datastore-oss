@@ -6,6 +6,7 @@ import (
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,11 +90,11 @@ func NewOssDatastore(config Config) (*datastore, error) {
 }
 
 func (s *datastore) Put(key ds.Key, value []byte) error {
-	return s.Bucket.PutObject(key.String(), bytes.NewBuffer(value))
+	return s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {
-	val, err := s.Bucket.GetObject(key.String())
+	val, err := s.Bucket.GetObject(s.ossPath(key.String()))
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +165,10 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 		},
 		Next: nextValue,
 	}), nil
+}
+
+func (s *datastore) ossPath(p string) string {
+	return path.Join(s.RootDirectory, p)
 }
 
 type ossBatch struct {
