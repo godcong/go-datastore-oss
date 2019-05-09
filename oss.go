@@ -111,7 +111,7 @@ func (s *datastore) Delete(key ds.Key) error {
 
 func (s *datastore) Query(q query.Query) (query.Results, error) {
 	if q.Orders != nil || q.Filters != nil {
-		return nil, fmt.Errorf("s3ds: filters or orders are not supported")
+		return nil, fmt.Errorf("ossds: filters or orders are not supported")
 	}
 
 	limit := q.Limit + q.Offset
@@ -250,7 +250,7 @@ func (b *ossBatch) Commit() error {
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("s3ds: failed batch operation:\n%s", strings.Join(errs, "\n"))
+		return fmt.Errorf("ossds: failed batch operation:\n%s", strings.Join(errs, "\n"))
 	}
 
 	return nil
