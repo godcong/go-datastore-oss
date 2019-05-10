@@ -90,11 +90,12 @@ func NewOssDatastore(config Config) (*datastore, error) {
 }
 
 func (s *datastore) Put(key ds.Key, value []byte) error {
-	fmt.Println("put Key:", key.String())
+	fmt.Println("datastore put Path:", s.ossPath(key.String()))
 	return s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {
+	fmt.Println("datastore get Path:", s.ossPath(key.String()))
 	val, err := s.Bucket.GetObject(s.ossPath(key.String()))
 	if err != nil {
 		return nil, err
@@ -104,10 +105,12 @@ func (s *datastore) Get(key ds.Key) (value []byte, err error) {
 }
 
 func (s *datastore) Has(key ds.Key) (exists bool, err error) {
+	fmt.Println("datastore check Path:", s.ossPath(key.String()))
 	return s.Bucket.IsObjectExist(s.ossPath(key.String()))
 }
 
 func (s *datastore) Delete(key ds.Key) error {
+	fmt.Println("datastore delete Path:", s.ossPath(key.String()))
 	return s.Bucket.DeleteObject(s.ossPath(key.String()))
 }
 
