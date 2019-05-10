@@ -90,6 +90,7 @@ func NewOssDatastore(config Config) (*datastore, error) {
 }
 
 func (s *datastore) Put(key ds.Key, value []byte) error {
+	fmt.Println("put Key:", key.String())
 	return s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
 }
 
@@ -182,16 +183,18 @@ type batchOp struct {
 	delete bool
 }
 
-func (b *ossBatch) Put(k ds.Key, val []byte) error {
-	b.ops[k.String()] = batchOp{
+func (b *ossBatch) Put(key ds.Key, val []byte) error {
+	fmt.Println("put Key:", key.String())
+	b.ops[key.String()] = batchOp{
 		val:    val,
 		delete: false,
 	}
 	return nil
 }
 
-func (b *ossBatch) Delete(k ds.Key) error {
-	b.ops[k.String()] = batchOp{
+func (b *ossBatch) Delete(key ds.Key) error {
+	fmt.Println("delete Key:", key.String())
+	b.ops[key.String()] = batchOp{
 		val:    nil,
 		delete: true,
 	}
@@ -261,9 +264,9 @@ func (b *ossBatch) Commit() error {
 	return nil
 }
 
-func (b *ossBatch) newPutJob(k ds.Key, value []byte) func() error {
+func (b *ossBatch) newPutJob(key ds.Key, value []byte) func() error {
 	return func() error {
-		return b.s.Put(k, value)
+		return b.s.Put(key, value)
 	}
 }
 
