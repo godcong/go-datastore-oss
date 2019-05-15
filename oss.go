@@ -49,7 +49,7 @@ func (s *datastore) Batch() (ds.Batch, error) {
 }
 
 func (s *datastore) GetSize(key ds.Key) (size int, err error) {
-	headers, err := s.Bucket.GetObjectMeta(key.String())
+	headers, err := s.Bucket.GetObjectMeta(s.ossPath(key.String()))
 	if err != nil {
 		if err.Error() == "NoSuchKey" {
 			return -1, ds.ErrNotFound
