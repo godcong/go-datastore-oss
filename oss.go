@@ -6,6 +6,7 @@ import (
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
+	"io/ioutil"
 	"path"
 	"strconv"
 	"strings"
@@ -40,32 +41,21 @@ type datastore struct {
 	Bucket *oss.Bucket
 }
 
+const NoSuchKey = "NoSuchKey"
+
+func parseError(err error) error {
+	if ossErr, ok := err.(oss.ServiceError); ok && ossErr.Code == NoSuchKey {
+		return ds.ErrNotFound
+	}
+	return nil
+}
+
 func (s *datastore) Batch() (ds.Batch, error) {
 	return &ossBatch{
 		s:          s,
 		ops:        make(map[string]batchOp),
 		numWorkers: s.Workers,
 	}, nil
-}
-
-func (s *datastore) GetSize(key ds.Key) (size int, err error) {
-	headers, err := s.Bucket.GetObjectMeta(s.ossPath(key.String()))
-	if err != nil {
-		if err.Error() == "NoSuchKey" {
-			return -1, ds.ErrNotFound
-		}
-		return -1, err
-	}
-	length := headers.Get("Content-Length")
-	u, err := strconv.ParseUint(length, 10, 64)
-	if err != nil {
-		return -1, err
-	}
-	return int(u), nil
-}
-
-func (s *datastore) Close() error {
-	return nil
 }
 
 func newDataStore(config Config, bucket *oss.Bucket) *datastore {
@@ -89,29 +79,49 @@ func NewOssDatastore(config Config) (*datastore, error) {
 	return newDataStore(config, bucket), nil
 }
 
-func (s *datastore) Put(key ds.Key, value []byte) error {
+func (s *datastore) Put(key ds.Key, value []byte) (err error) {
 	fmt.Println("datastore put Path:", s.ossPath(key.String()))
-	return s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
+	err = s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
+	return parseError(err)
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {
 	fmt.Println("datastore get Path:", s.ossPath(key.String()))
 	val, err := s.Bucket.GetObject(s.ossPath(key.String()))
 	if err != nil {
-		return nil, err
+		return nil, parseError(err)
 	}
-	_, err = val.Read(value)
-	return value, err
+	defer val.Close()
+	return ioutil.ReadAll(val)
+}
+
+func (s *datastore) GetSize(key ds.Key) (size int, err error) {
+	headers, err := s.Bucket.GetObjectMeta(s.ossPath(key.String()))
+	if err != nil {
+		return -1, parseError(err)
+	}
+	length := headers.Get("Content-Length")
+	u, err := strconv.ParseUint(length, 10, 64)
+	if err != nil {
+		return -1, err
+	}
+	return int(u), nil
+}
+
+func (s *datastore) Close() error {
+	return nil
 }
 
 func (s *datastore) Has(key ds.Key) (exists bool, err error) {
 	fmt.Println("datastore check Path:", s.ossPath(key.String()))
-	return s.Bucket.IsObjectExist(s.ossPath(key.String()))
+	b, err := s.Bucket.IsObjectExist(s.ossPath(key.String()))
+	return b, parseError(err)
 }
 
-func (s *datastore) Delete(key ds.Key) error {
+func (s *datastore) Delete(key ds.Key) (err error) {
 	fmt.Println("datastore delete Path:", s.ossPath(key.String()))
-	return s.Bucket.DeleteObject(s.ossPath(key.String()))
+	err = s.Bucket.DeleteObject(s.ossPath(key.String()))
+	return parseError(err)
 }
 
 func (s *datastore) Query(q query.Query) (query.Results, error) {
