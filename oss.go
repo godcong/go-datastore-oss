@@ -98,7 +98,10 @@ func (s *datastore) Get(key ds.Key) (value []byte, err error) {
 func (s *datastore) GetSize(key ds.Key) (size int, err error) {
 	headers, err := s.Bucket.GetObjectMeta(s.ossPath(key.String()))
 	if err != nil {
-		return -1, parseError(err)
+		if ossErr, ok := err.(oss.ServiceError); ok && ossErr.StatusCode == 404 {
+			return -1, ds.ErrNotFound
+		}
+		return -1, err
 	}
 	length := headers.Get("Content-Length")
 	u, err := strconv.ParseUint(length, 10, 64)
@@ -157,9 +160,8 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 				return query.Result{Error: err}, false
 			}
 		}
-
 		entry := query.Entry{
-			Key: ds.NewKey(lsRes.Objects[index].Key).String(),
+			Key: s.ossKey(lsRes.Objects[index].Key),
 		}
 		if !q.KeysOnly {
 			value, err := s.Get(ds.NewKey(entry.Key))
@@ -179,6 +181,9 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 		},
 		Next: nextValue,
 	}), nil
+}
+func (s *datastore) ossKey(p string) string {
+	return strings.Replace(p, s.RootDirectory, "", 1)
 }
 
 func (s *datastore) ossPath(p string) string {
