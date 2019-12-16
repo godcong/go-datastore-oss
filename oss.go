@@ -50,6 +50,10 @@ func parseError(err error) error {
 	return nil
 }
 
+func (s *datastore) Sync(prefix ds.Key) error {
+	return nil
+}
+
 func (s *datastore) Batch() (ds.Batch, error) {
 	return &ossBatch{
 		s:          s,
