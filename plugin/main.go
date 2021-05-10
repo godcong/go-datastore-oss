@@ -26,7 +26,7 @@ func (oss OSSPlugin) Version() string {
 	return "0.0.1"
 }
 
-func (oss OSSPlugin) Init() error {
+func (oss OSSPlugin) Init(env *plugin.Environment) error {
 	return nil
 }
 

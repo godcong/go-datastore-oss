@@ -50,7 +50,7 @@ func parseError(err error) error {
 	return nil
 }
 
-func (s *datastore) Sync(prefix ds.Key) error {
+func (s *datastore) Sync(_ ds.Key) error {
 	return nil
 }
 
@@ -84,13 +84,11 @@ func NewOssDatastore(config Config) (*datastore, error) {
 }
 
 func (s *datastore) Put(key ds.Key, value []byte) (err error) {
-	fmt.Println("datastore put Path:", s.ossPath(key.String()))
 	err = s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
 	return parseError(err)
 }
 
 func (s *datastore) Get(key ds.Key) (value []byte, err error) {
-	fmt.Println("datastore get Path:", s.ossPath(key.String()))
 	val, err := s.Bucket.GetObject(s.ossPath(key.String()))
 	if err != nil {
 		return nil, parseError(err)
@@ -120,13 +118,11 @@ func (s *datastore) Close() error {
 }
 
 func (s *datastore) Has(key ds.Key) (exists bool, err error) {
-	fmt.Println("datastore check Path:", s.ossPath(key.String()))
 	b, err := s.Bucket.IsObjectExist(s.ossPath(key.String()))
 	return b, parseError(err)
 }
 
 func (s *datastore) Delete(key ds.Key) (err error) {
-	fmt.Println("datastore delete Path:", s.ossPath(key.String()))
 	err = s.Bucket.DeleteObject(s.ossPath(key.String()))
 	return parseError(err)
 }
@@ -179,12 +175,14 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 		return query.Result{Entry: entry}, true
 	}
 
-	return query.ResultsFromIterator(q, query.Iterator{
-		Close: func() error {
-			return nil
+	return query.ResultsFromIterator(
+		q, query.Iterator{
+			Close: func() error {
+				return nil
+			},
+			Next: nextValue,
 		},
-		Next: nextValue,
-	}), nil
+	), nil
 }
 func (s *datastore) ossKey(p string) string {
 	return strings.Replace(p, s.RootDirectory, "", 1)
