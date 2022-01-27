@@ -2,15 +2,17 @@ package oss
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
-	ds "github.com/ipfs/go-datastore"
-	"github.com/ipfs/go-datastore/query"
 	"io/ioutil"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	ds "github.com/ipfs/go-datastore"
+	"github.com/ipfs/go-datastore/query"
 )
 
 const (
@@ -24,8 +26,6 @@ const (
 
 	defaultWorkers = 100
 )
-
-var _ ds.Datastore = (*datastore)(nil)
 
 type Config struct {
 	Endpoint        string
@@ -43,18 +43,11 @@ type datastore struct {
 
 const NoSuchKey = "NoSuchKey"
 
-func parseError(err error) error {
-	if ossErr, ok := err.(oss.ServiceError); ok && ossErr.Code == NoSuchKey {
-		return ds.ErrNotFound
-	}
+func (s *datastore) Sync(ctx context.Context, _ ds.Key) error {
 	return nil
 }
 
-func (s *datastore) Sync(_ ds.Key) error {
-	return nil
-}
-
-func (s *datastore) Batch() (ds.Batch, error) {
+func (s *datastore) Batch(ctx context.Context) (ds.Batch, error) {
 	return &ossBatch{
 		s:          s,
 		ops:        make(map[string]batchOp),
@@ -83,21 +76,24 @@ func NewOssDatastore(config Config) (*datastore, error) {
 	return newDataStore(config, bucket), nil
 }
 
-func (s *datastore) Put(key ds.Key, value []byte) (err error) {
+func (s *datastore) Put(ctx context.Context, key ds.Key, value []byte) (err error) {
 	err = s.Bucket.PutObject(s.ossPath(key.String()), bytes.NewBuffer(value))
-	return parseError(err)
+	return err
 }
 
-func (s *datastore) Get(key ds.Key) (value []byte, err error) {
-	val, err := s.Bucket.GetObject(s.ossPath(key.String()))
+func (s *datastore) Get(ctx context.Context, key ds.Key) (value []byte, err error) {
+	resp, err := s.Bucket.GetObject(s.ossPath(key.String()))
 	if err != nil {
-		return nil, parseError(err)
+		if isNotFound(err) {
+			return nil, ds.ErrNotFound
+		}
+		return nil, err
 	}
-	defer val.Close()
-	return ioutil.ReadAll(val)
+	defer resp.Close()
+	return ioutil.ReadAll(resp)
 }
 
-func (s *datastore) GetSize(key ds.Key) (size int, err error) {
+func (s *datastore) GetSize(ctx context.Context, key ds.Key) (size int, err error) {
 	headers, err := s.Bucket.GetObjectMeta(s.ossPath(key.String()))
 	if err != nil {
 		if ossErr, ok := err.(oss.ServiceError); ok && ossErr.StatusCode == 404 {
@@ -117,17 +113,27 @@ func (s *datastore) Close() error {
 	return nil
 }
 
-func (s *datastore) Has(key ds.Key) (exists bool, err error) {
-	b, err := s.Bucket.IsObjectExist(s.ossPath(key.String()))
-	return b, parseError(err)
+func (s *datastore) Has(ctx context.Context, key ds.Key) (exists bool, err error) {
+	_, err = s.GetSize(ctx, key)
+	if err != nil {
+		if err == ds.ErrNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
-func (s *datastore) Delete(key ds.Key) (err error) {
+func (s *datastore) Delete(ctx context.Context, key ds.Key) (err error) {
 	err = s.Bucket.DeleteObject(s.ossPath(key.String()))
-	return parseError(err)
+	if isNotFound(err) {
+		// delete is idempotent
+		err = nil
+	}
+	return err
 }
 
-func (s *datastore) Query(q query.Query) (query.Results, error) {
+func (s *datastore) Query(ctx context.Context, q query.Query) (query.Results, error) {
 	if q.Orders != nil || q.Filters != nil {
 		return nil, fmt.Errorf("ossds: filters or orders are not supported")
 	}
@@ -161,10 +167,12 @@ func (s *datastore) Query(q query.Query) (query.Results, error) {
 			}
 		}
 		entry := query.Entry{
-			Key: s.ossKey(lsRes.Objects[index].Key),
+			//Key: ds.NewKey(lsRes.Objects[index].Key).String(),
+			Key:  s.ossKey(lsRes.Objects[index].Key),
+			Size: int(lsRes.Objects[index].Size),
 		}
 		if !q.KeysOnly {
-			value, err := s.Get(ds.NewKey(entry.Key))
+			value, err := s.Get(ctx, ds.NewKey(entry.Key))
 			if err != nil {
 				return query.Result{Error: err}, false
 			}
@@ -203,8 +211,7 @@ type batchOp struct {
 	delete bool
 }
 
-func (b *ossBatch) Put(key ds.Key, val []byte) error {
-	fmt.Println("put Key:", key.String())
+func (b *ossBatch) Put(ctx context.Context, key ds.Key, val []byte) error {
 	b.ops[key.String()] = batchOp{
 		val:    val,
 		delete: false,
@@ -212,8 +219,7 @@ func (b *ossBatch) Put(key ds.Key, val []byte) error {
 	return nil
 }
 
-func (b *ossBatch) Delete(key ds.Key) error {
-	fmt.Println("delete Key:", key.String())
+func (b *ossBatch) Delete(ctx context.Context, key ds.Key) error {
 	b.ops[key.String()] = batchOp{
 		val:    nil,
 		delete: true,
@@ -221,7 +227,7 @@ func (b *ossBatch) Delete(key ds.Key) error {
 	return nil
 }
 
-func (b *ossBatch) Commit() error {
+func (b *ossBatch) Commit(ctx context.Context) error {
 	var (
 		deleteObjs []string
 		putKeys    []ds.Key
@@ -255,7 +261,7 @@ func (b *ossBatch) Commit() error {
 	}
 
 	for _, k := range putKeys {
-		jobs <- b.newPutJob(k, b.ops[k.String()].val)
+		jobs <- b.newPutJob(ctx, k, b.ops[k.String()].val)
 	}
 
 	if len(deleteObjs) > 0 {
@@ -265,7 +271,7 @@ func (b *ossBatch) Commit() error {
 				limit = len(deleteObjs[i:])
 			}
 
-			jobs <- b.newDeleteJob(deleteObjs[i : i+limit])
+			jobs <- b.newDeleteJob(ctx, deleteObjs[i:i+limit])
 		}
 	}
 	close(jobs)
@@ -284,16 +290,24 @@ func (b *ossBatch) Commit() error {
 	return nil
 }
 
-func (b *ossBatch) newPutJob(key ds.Key, value []byte) func() error {
+func (b *ossBatch) newPutJob(ctx context.Context, key ds.Key, value []byte) func() error {
 	return func() error {
-		return b.s.Put(key, value)
+		return b.s.Put(ctx, key, value)
 	}
 }
 
-func (b *ossBatch) newDeleteJob(objs []string) func() error {
+func isNotFound(err error) bool {
+	ossErr, ok := err.(oss.ServiceError)
+	return ok && ossErr.Code == NoSuchKey
+}
+
+func (b *ossBatch) newDeleteJob(ctx context.Context, objs []string) func() error {
 	return func() error {
 		_, err := b.s.Bucket.DeleteObjects(objs, oss.DeleteObjectsQuiet(true))
 		if err != nil {
+			return err
+		}
+		if err != nil && !isNotFound(err) {
 			return err
 		}
 		return nil
